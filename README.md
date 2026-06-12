@@ -112,10 +112,11 @@ Use `./bin/memsim.exe` if you built the `.exe` version.
 
 ## Documentation
 
-For the full explanation, architecture, algorithms, test cases, limitations, and conclusion, read:
+The full project report is available in the docs folder at `docs/ProjectReport.md`.
 
 [Project Report](docs/ProjectReport.md)
 
 Additional design notes are available in:
 
 [Design Document](docs/DesignDocument.md)
+
