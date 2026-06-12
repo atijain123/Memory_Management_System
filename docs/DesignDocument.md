@@ -1,250 +1,212 @@
-# Memory Management Simulator - Design Document
+# Memory Management Simulator - Design Plan
 
-## 1. Design Intention
+## 1. Initial Idea
 
-The main idea behind this project was to build a small but clear simulator that explains how memory management works inside an operating system. Instead of making a very large system with too many features, the design focuses on a few important concepts and makes them visible through command-line output.
+The idea behind this project was to create a small simulator that makes operating-system memory management easier to understand. Instead of directly working with real system memory, the project uses a simulated memory space where allocation, freeing, fragmentation, and cache access can be observed through commands.
 
-The project was planned around two questions:
+Before implementation, I planned the project around two main parts:
 
-1. How does an operating system allocate and free contiguous memory blocks?
-2. How does a CPU-style cache respond when memory addresses are accessed repeatedly?
+- a memory allocator that shows how RAM blocks are assigned and freed
+- a cache simulator that shows how repeated address access creates hits and misses
 
-Because this is an educational simulator, the design favors readability, step-by-step behavior, and easy testing over low-level hardware accuracy.
+The goal was to keep the system simple enough to explain, but complete enough to demonstrate the main concepts clearly.
 
-## 2. Initial Design Approach
+## 2. Design Goals
 
-At the beginning, the simulator was divided into three logical parts:
+The design goals were:
 
-| Part | Design Purpose |
+- keep the simulator command-based and easy to test
+- make memory layout visible after allocations and frees
+- support multiple allocation strategies without changing the memory manager each time
+- calculate useful statistics such as utilization and fragmentation
+- simulate cache behavior using a simple L1/L2 model
+- keep each major responsibility in a separate class
+
+## 3. Planned Modules
+
+I divided the project into these modules before implementation:
+
+| Module | Planned Role |
 | --- | --- |
-| Command shell | Accept commands from the user and display results |
-| Memory manager | Maintain simulated RAM and block metadata |
-| Cache simulator | Track L1/L2 cache accesses, hits, and misses |
+| `SimulatorShell` | Read user commands and call the correct simulator component |
+| `MemoryManager` | Store memory blocks, allocate, free, split, merge, and print stats |
+| `AllocatorStrategy` | Common interface for allocation algorithms |
+| `FirstFit`, `BestFit`, `WorstFit` | Different ways of selecting a free block |
+| `Cache` | Simulate L1/L2 cache access, replacement, and statistics |
+| `main.cpp` | Start the simulator only |
 
-This separation was chosen so that the command-line interface does not directly contain all allocation and cache logic. The shell only interprets commands, while the actual work is handled by separate classes.
+This design keeps `main.cpp` small and avoids mixing command parsing with allocation logic.
 
-## 3. Why a Command-Line Simulator
+## 4. Memory Design Thinking
 
-A command-line interface was selected because it makes every operation visible. For example, the user can initialize memory, allocate blocks, free blocks, dump memory, and then immediately see how the internal memory layout changed.
-
-This is useful for learning because the project does not hide the process behind a graphical interface. Each command maps directly to one memory-management action.
-
-Example flow:
-
-```text
-init memory 1024
-set allocator best fit
-malloc 100
-malloc 200
-free 100
-dump memory
-stats
-```
-
-This flow shows allocation, deallocation, fragmentation, and memory statistics in a simple sequence.
-
-## 4. Memory Representation Design
-
-The simulated physical memory is represented using:
+For simulated RAM, I chose a continuous byte array model:
 
 ```cpp
 std::vector<uint8_t> memory;
 ```
 
-This vector represents a continuous byte-addressable memory region. The simulator does not store meaningful user data in this vector; it mainly uses the vector size to represent total available memory.
+This gives the simulator a fixed memory size after `init memory <size>`.
 
-The metadata for memory blocks is stored separately using:
+For block tracking, I chose:
 
 ```cpp
 std::list<Block> blockList;
 ```
 
+A list fits this project because memory blocks need to be split and adjacent free blocks need to be merged. Inserting a new free block after allocation and removing a merged block during coalescing is straightforward with a linked-list style structure.
+
 Each block stores:
 
-- start address
-- block size
-- free/used status
+- starting address
+- size
+- whether it is free or used
 
-A linked list was chosen because allocation and deallocation often require inserting or merging neighboring blocks. Using a list makes block splitting and coalescing easier to express.
+## 5. Data Structures and Complexity
 
-## 5. Block Splitting Design
+The main data structures were chosen to keep the simulator simple, readable, and suitable for memory-management operations.
 
-When a user requests memory, the selected allocator strategy returns a suitable free block. If the free block is larger than the requested size, it is split into two parts:
+| Data Structure | Used In | Why It Was Used | Main Complexity |
+| --- | --- | --- | --- |
+| `std::vector<uint8_t>` | Simulated physical memory | Represents a continuous byte-addressable RAM space | Initialization: O(n) |
+| `std::list<Block>` | Memory block metadata | Allows easy insertion during block splitting and deletion during coalescing | Search: O(n), insert/erase at known position: O(1) |
+| `std::unique_ptr<AllocatorStrategy>` | Active allocator strategy | Manages allocator object ownership safely | Strategy switch: O(1) |
+| `std::vector<CacheSet>` | Cache sets | Allows direct indexing into a cache set | Set lookup: O(1) |
+| `std::vector<CacheLine>` | Lines inside each cache set | Stores fixed associativity cache lines | Line scan: O(associativity) |
+| `std::deque<size_t>` | FIFO replacement order | Tracks the oldest cache line in each set | push/pop: O(1) |
 
-1. a used block of the requested size
-2. a remaining free block
+### Memory Operation Complexity
 
-This design was used because it clearly demonstrates contiguous allocation and external fragmentation.
+| Operation | Complexity | Reason |
+| --- | --- | --- |
+| First Fit allocation | O(n) | Scans blocks until the first suitable free block is found |
+| Best Fit allocation | O(n) | Scans all blocks to find the smallest suitable free block |
+| Worst Fit allocation | O(n) | Scans all blocks to find the largest suitable free block |
+| Block splitting | O(1) after block is found | Inserts a new free block next to the allocated block |
+| Free operation | O(n) | Searches for the block with the given starting address |
+| Coalescing | O(n) | Traverses the block list and merges adjacent free blocks |
+| Memory dump | O(n) | Prints every block in the block list |
+| Memory stats | O(n) | Computes used memory, free memory, and largest free block |
 
-Example:
+Here, `n` is the number of memory blocks currently present in the block list.
 
-```text
-Before malloc 100:
-[0-1023] FREE
+### Cache Operation Complexity
 
-After malloc 100:
-[0-99] USED
-[100-1023] FREE
-```
-
-## 6. Coalescing Design
-
-When a block is freed, adjacent free blocks should be merged. This is called coalescing.
-
-The design decision was to call coalescing immediately after every successful `free` operation. This keeps the memory layout cleaner and prevents unnecessary fragmentation from building up when neighboring blocks are free.
-
-Example:
-
-```text
-[0-99] FREE
-[100-199] FREE
-```
-
-After coalescing:
+Cache access is designed to be fast because the set index is calculated directly from the address. After the set is found, only the lines inside that set are checked.
 
 ```text
-[0-199] FREE
+Cache access complexity = O(associativity)
 ```
 
-## 7. Allocation Strategy Design
+For this simulator:
 
-The allocator algorithms were designed using the Strategy Pattern. This means the memory manager does not need to know the internal details of First Fit, Best Fit, or Worst Fit. It only asks the selected strategy to find a suitable free block.
+- L1 associativity is 2, so only 2 lines are checked per set.
+- L2 associativity is 4, so only 4 lines are checked per set.
 
-This design was chosen because:
+Because associativity is small and fixed, cache access behaves like constant time in this project.`r`n`r`n## 6. Allocation Flow Planned
 
-- new allocation strategies can be added later
-- the memory manager remains simpler
-- the algorithms can be compared using the same memory operations
-
-### First Fit
-
-First Fit was included because it is simple and commonly taught in operating-system memory allocation. It scans from the beginning and selects the first block large enough for the request.
-
-### Best Fit
-
-Best Fit was included to show a strategy that tries to reduce leftover space in the selected block. It scans all free blocks and chooses the closest match.
-
-### Worst Fit
-
-Worst Fit was included as a contrast to Best Fit. It selects the largest available block so that the remaining free block may still be useful for future allocations.
-
-## 8. Fragmentation Statistics Design
-
-The simulator calculates memory statistics to help the user understand the current state of memory.
-
-The main statistics are:
-
-- total memory
-- used memory
-- free memory
-- utilization percentage
-- largest free block
-- external fragmentation percentage
-
-External fragmentation is calculated by comparing total free memory with the largest single free block:
+The allocation flow was planned like this:
 
 ```text
-External Fragmentation = 1 - (Largest Free Block / Total Free Memory)
+malloc request
+-> check selected allocator
+-> find suitable free block
+-> split block if larger than needed
+-> mark selected part as used
+-> return starting address
 ```
 
-This was added because simply knowing total free memory is not enough. A system may have enough free memory in total, but it may be split into small blocks.
+This makes the memory layout easy to explain because every allocation either consumes a full free block or splits it into used and free parts.
 
-## 9. Cache Design
+## 7. Free and Coalescing Flow Planned
 
-The cache simulator was added to connect memory allocation with memory access behavior. The cache does not store actual data values. Instead, it tracks whether a memory address would be a cache hit or miss.
-
-The design uses two cache levels:
-
-| Cache | Size | Associativity | Block Size | Replacement |
-| --- | ---: | ---: | ---: | --- |
-| L1 | 1024 bytes | 2-way | 64 bytes | FIFO |
-| L2 | 4096 bytes | 4-way | 64 bytes | FIFO |
-
-The cache access flow is:
+The free flow was planned like this:
 
 ```text
-CPU access -> L1 cache -> L2 cache -> physical memory
+free request
+-> find block by starting address
+-> validate address
+-> reject double free
+-> mark block as free
+-> merge adjacent free blocks
 ```
 
-This structure was chosen because it is simple enough to implement but still demonstrates the idea of a multilevel cache hierarchy.
+Coalescing was included because without it the simulator would quickly show many separate free blocks even when they are next to each other. Merging them keeps the memory layout cleaner and demonstrates how fragmentation can be reduced.
 
-## 10. FIFO Replacement Design
+## 8. Allocator Strategy Plan
 
-FIFO replacement was selected because it is easy to understand and explain. Each cache set keeps an insertion-order queue. When the set is full, the oldest inserted cache line is replaced.
+I used the Strategy Pattern because the memory manager should not contain separate hard-coded logic for every allocation algorithm.
 
-The design avoids more complex policies like LRU because the goal of the project is to demonstrate the cache hierarchy clearly, not to implement every possible replacement policy.
+The plan was:
 
-## 11. Command Handling Design
+```text
+MemoryManager asks selected strategy for a block
+Strategy returns an iterator to the chosen free block
+MemoryManager performs the actual split/allocation
+```
 
-The command handling is placed in `SimulatorShell`. This class reads user commands and calls the correct part of the simulator.
+This allows First Fit, Best Fit, and Worst Fit to be swapped at runtime using:
 
-This design keeps `main.cpp` small. The main function only creates the shell and starts it. This makes the project easier to maintain because command parsing is separated from memory and cache logic.
+```text
+set allocator first fit
+set allocator best fit
+set allocator worst fit
+```
 
-Supported command groups:
+## 9. Cache Design Thinking
 
-| Group | Examples |
+For the cache part, I planned a two-level cache:
+
+```text
+CPU access -> L1 -> L2 -> Physical Memory
+```
+
+The cache does not store real data. It only tracks whether a memory address maps to an existing cache line. This is enough to demonstrate hits, misses, and spatial locality.
+
+The planned cache configuration was:
+
+| Cache | Size | Associativity | Block Size |
+| --- | ---: | ---: | ---: |
+| L1 | 1024 bytes | 2-way | 64 bytes |
+| L2 | 4096 bytes | 4-way | 64 bytes |
+
+FIFO replacement was selected because it is simple to implement and easy to explain. Each set keeps an insertion order, and the oldest line is replaced first.
+
+## 10. Command Interface Plan
+
+The command interface was designed to act like a small simulator shell. The important commands planned were:
+
+| Command Type | Commands |
 | --- | --- |
-| Memory setup | `init memory 1024` |
-| Allocator selection | `set allocator first fit` |
-| Allocation/free | `malloc 100`, `free 0` |
+| Setup | `init memory`, `set allocator` |
+| Allocation | `malloc`, `alloc`, `free` |
 | Inspection | `dump memory`, `stats` |
-| Cache access | `read 64`, `write 64` |
-| Cache control | `reset cache` |
+| Cache | `read`, `write`, `access`, `reset cache` |
+| Control | `help`, `exit` |
 
-## 12. Error Handling Design
+This made it easy to manually test the project and also made it easy to create `.txt` test files containing command sequences.
 
-Basic validation was added for common mistakes:
+## 11. Testing Plan
 
-- allocation before setting an allocator
-- zero-size allocation
-- freeing an invalid address
-- double free detection
-- invalid command usage
+Testing was planned using input files instead of a separate testing framework. Since the simulator already reads commands, test files can be redirected into the executable.
 
-The goal was not to make a complex production-level parser, but to prevent common incorrect operations from silently changing the simulator state.
+Planned tests:
 
-## 13. Testing Design
-
-The project uses text files as scripted command inputs. This was chosen because the simulator itself is command-driven.
-
-Test files include:
-
-| Test File | Purpose |
+| Test | Purpose |
 | --- | --- |
-| `fragmentation_test.txt` | Shows allocation, freeing, memory dump, and fragmentation |
-| `cache_test.txt` | Shows cache locality and hit/miss behavior |
-| `strategy_comparison_test.txt` | Shows the difference between Best Fit and Worst Fit |
+| Fragmentation test | Check allocation, free, dump, and fragmentation stats |
+| Cache test | Check L1/L2 hit and miss behavior |
+| Strategy comparison test | Show different choices by Best Fit and Worst Fit |
 
-This design makes testing simple because each test file is just a sequence of commands that can be redirected into the executable.
+Example:
 
-## 14. Important Design Decisions
+```bash
+./bin/memsim < tests/cache_test.txt
+```
 
-| Decision | Reason |
-| --- | --- |
-| Use contiguous memory model | Easy to visualize allocation and fragmentation |
-| Store metadata separately | Keeps simulation simple and readable |
-| Use linked list for blocks | Makes splitting and coalescing straightforward |
-| Use Strategy Pattern | Allows allocator algorithms to be switched easily |
-| Use FIFO cache replacement | Simple and explainable cache policy |
-| Use command-line interface | Makes simulator behavior transparent |
-| Keep virtual memory out of scope | Avoids making the project too complex |
+## 12. Final Design Summary
 
-## 15. Features Not Included
+The final design is based on separating the project into small components. The command shell handles user interaction, the memory manager handles allocation state, allocator classes decide which free block to use, and the cache class handles memory-access simulation.
 
-Some features were intentionally not included because they would make the project much larger:
+This design made the project easier to build, test, explain, and extend.
 
-- virtual memory
-- paging
-- page replacement algorithms
-- Buddy Memory Allocation System
-- real process scheduling
-- actual data storage inside cache lines
-- graphical user interface
 
-These can be added as future improvements, but they were not part of the current design.
-
-## 16. Final Design Summary
-
-The final design is a modular simulator with separate components for command handling, memory allocation, allocation strategies, and cache simulation. The project was designed to make operating-system memory concepts visible through simple commands and readable output.
-
-The main focus is not just to allocate memory, but to show how memory layout changes over time, how fragmentation appears, how coalescing helps, and how cache locality affects memory access results.
