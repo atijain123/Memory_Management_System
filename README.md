@@ -112,11 +112,14 @@ Use `./bin/memsim.exe` if you built the `.exe` version.
 
 ## Documentation
 
-The full project report is available in the docs folder at `docs/ProjectReport.md`.
+The full project report is available as a PDF in the docs folder at `docs/ProjectReport.pdf`.
 
-[Project Report](docs/ProjectReport.md)
+[Project Report PDF](docs/ProjectReport.pdf)
+
+Editable Markdown source: [ProjectReport.md](docs/ProjectReport.md)
 
 Additional design notes are available in:
 
 [Design Document](docs/DesignDocument.md)
+
 
